@@ -1,0 +1,5 @@
+google-cloud-bigquery
+confluent-kafka
+faker
+pandas
+psycopg2
