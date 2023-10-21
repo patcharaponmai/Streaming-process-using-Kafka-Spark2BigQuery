@@ -1,33 +1,22 @@
 import sys
 import configparser
 import json
-import apache_beam as beam
 from datetime import datetime
-from google.cloud import bigquery, pubsub_v1
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import from_json, col
+from pyspark.sql.types import StructType, StructField, StringType, IntegerType
+from google.cloud import bigquery
 from google.cloud.exceptions import exceptions
 from google.api_core.exceptions import AlreadyExists
-from apache_beam.options.pipeline_options import PipelineOptions, StandardOptions
-
-
 
 def interact_google_pubsub_subscription():
 
     """
-        This function perform connection to Google Cloud Pub/Sub and Google BigQuery.
+        This function perform connection to Google BigQuery.
         Also create Dataset and Target table in Google BigQuery.
     """
     
-    global subscription_path, dataset_id, dataset, table, schema
-
-    # Initialize Pub/Sub Publisher and Subscriber client
-    try:
-        subscriber = pubsub_v1.SubscriberClient()
-    except Exception as e:
-        print(f"Error cannot create connection with Pub/Sub client: {e}")
-        sys.exit(1)
-
-    # Create a fully-qualified subscription path
-    subscription_path = subscriber.subscription_path(project=project_id, subscription=pubsub_subscription)
+    global dataset, table
 
     # Initialize the BigQuery client
     try:
@@ -72,84 +61,69 @@ def interact_google_pubsub_subscription():
         print(f"Error creating BigQuery table: {e}")
         sys.exit(1)
 
-# Define a function to process the incoming notifications.
-def process_notification(notification):
+# Define a function to read message and load into Google BigQuery
+def process_notification(messages):
 
-    # Decode the byte string to get a JSON string
-    message = notification.decode('utf-8')
+    if not messages.isEmpty():
 
-    # Parse the JSON string into a Python dictionary
-    data = json.loads(message)
+        # Define the schema for the incoming JSON messages
+        message_schema = StructType([
+            StructField('event_id', StringType(), True),
+            StructField('name', StringType(), True),
+            StructField('event_name', StringType(), True),
+            StructField('category', StringType(), True),
+            StructField('item_id', StringType(), True),
+            StructField('item_quantity', IntegerType(), True),
+            StructField('event_time', StringType(), True),
+        ])
 
-    # Original message
-    print(f"Data before transform: {data}")
+        # Parse the JSON messages
+        message_df = messages.selectExpr("CAST(value AS STRING)").select(from_json(col("value"), message_schema).alias("message")).select("message.*")
 
-    # Transform data
-    data['event_name'] = data['event_name'].replace("_", " ").upper()
-    data['event_time'] = datetime.strptime(data['event_time'], "%Y-%m-%dT%H:%M:%S.%f").strftime("%Y-%m-%d %H:%M:%S")
+        # Perform necessary data transformations here if needed
+        processed_data = message_df.withColumn("event_name", col("event_name").replace("_", " ").alias("event_name")).withColumn("event_time", to_timestamp(col("event_time"), "yyyy-MM-dd HH:mm:ss").alias("event_time"))
 
-    print(f"Data before transform: {data}\n")
-
-    return data
+        # Write the processed data to BigQuery
+        processed_data.write \
+            .format('bigquery') \
+            .option('table', f'{project_id}:{dataset}.{table_id}') \
+            .mode('append') \
+            .save()
 
 def main():
-
     interact_google_pubsub_subscription()
 
-    # Define your Apache Beam pipeline options.
-    options = PipelineOptions(['--num_workers=3',])
-    options.view_as(StandardOptions).streaming = True
-
-    # Create a pipeline.
-    p = beam.Pipeline(options=options)
-
-    # Define the dataset_id, project_id, and table_id as needed
-    schema = {
-        'fields': [
-            {"name": "event_id", "type": "STRING", "mode": "NULLABLE"},
-            {"name": "name", "type": "STRING", "mode": "NULLABLE"},
-            {"name": "event_name", "type": "STRING", "mode": "NULLABLE"},
-            {"name": "category", "type": "STRING", "mode": "NULLABLE"},
-            {"name": "item_id", "type": "STRING", "mode": "NULLABLE"},
-            {"name": "item_quantity", "type": "INTEGER", "mode": "NULLABLE"},
-            {"name": "event_time", "type": "TIMESTAMP", "mode": "NULLABLE"}
-        ]
-    }
-
-    table_ref = f"{project_id}:{dataset_id}.{table_id}"
-
-    data_changes = (
-        p
-        | 'Read PostgreSQL Notifications' >> beam.io.ReadFromPubSub(subscription=f"{subscription_path}")
-        | 'Process Notifications' >> beam.Map(process_notification)
-        | 'Write to BigQuery' >> beam.io.WriteToBigQuery(
-            table=table_ref,
-            schema=schema,
-            create_disposition=beam.io.BigQueryDisposition.CREATE_IF_NEEDED,
-            write_disposition=beam.io.BigQueryDisposition.WRITE_APPEND,
-        )
-    )
-
-    print(f"Project id : {project_id}")
-    print(f"Subscription path : {subscription_path}")
-
     try:
-        print("=====================================================")
-        print("============ Start Apache Beam Streaming ============")
-        print("=====================================================")
+        print("================================================")
+        print("============ Start Spark Streaming ============")
+        print("================================================")
         print()
         print("Streaming is available ...")
         print()
 
-        # Run the pipeline.
-        result = p.run()
-        result.wait_until_finish()
-    except KeyboardInterrupt as e:        
-        print("=====================================================")
-        print("============ Stop Apache Beam Streaming =============")
-        print("=====================================================")
+        spark = SparkSession.builder.appName("Spark2BigQuery").getOrCreate()
+        
+        # Define a Structured Streaming DataFrame from Kafka source
+        kafkaStream = spark.readStream \
+            .format("kafka") \
+            .option("kafka.bootstrap.servers", kafka_broker) \
+            .option("subscribe", kafka_topic) \
+            .load()
+
+        messages = kafkaStream.selectExpr("CAST(value AS STRING)")
+
+        query = messages.writeStream \
+            .foreach(process_notification) \
+            .start()
+
+        query.awaitTermination()
+    except KeyboardInterrupt as e:
+        print("================================================")
+        print("============ Stop Spark Streaming =============")
+        print("================================================")
         print()
         print("Streaming is unavailable ...")
+
 
 ######################################
 ############ MAIN PROGRAM ############
@@ -164,13 +138,16 @@ if __name__ == '__main__':
     config.read("./config.ini")
 
     try:
+        kafka_broker = config.get('PROJ_CONF', 'KAFKA_BROKER')
+        kafka_topic = config.get('PROJ_CONF', 'KAFKA_TOPIC')
         project_id = config.get('PROJ_CONF', 'PROJ_ID')
-        pubsub_topic = config.get('PROJ_CONF', 'PUBSUB_TOPIC_NAME')
-        pubsub_subscription = config.get('PROJ_CONF', 'PUBSUB_SUBSCRIPTION_NAME')
         dataset_id = config.get('PROJ_CONF', 'DATASET_NAME')
         table_id = config.get('PROJ_CONF', 'TABLE_NAME')
     except Exception as e:
         print(f"Error cannot get require parameters: {e}")
         sys.exit(1)
 
+    # Initialize Spark Session
+    spark = SparkSession.builder.appName("Spark2BigQuery").getOrCreate()
+    
     main()

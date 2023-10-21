@@ -4,7 +4,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: jupyter:1.0
+    image: jupyter-kafka-spark2bigquery:1.0
     container_name: jupyter-notebook-kafka-gcp-streaming-project
     volumes:
       - ./source_code:/app
@@ -18,27 +18,32 @@ services:
       PGPASSWORD: P@ssw0rd
       PGDATABASE: online_shopping_db_kafka
       GOOGLE_APPLICATION_CREDENTIALS: ./secrete_key/planar-beach-402009-5c3ff91bc2fa.json
+      JAVA_HOME: /usr/lib/jvm/java-8-openjdk-amd64
     command: ["start-notebook.sh", "--NotebookApp.token=''"]
 
   zookeeper:
-    image: confluentinc/cp-zookeeper:7.0.0
+    image: confluentinc/cp-zookeeper:latest
+    restart: always
+    hostname: zookeeper
     environment:
       ZOOKEEPER_CLIENT_PORT: 2181
       ZOOKEEPER_TICK_TIME: 2000
 
   kafka:
-    image: confluentinc/cp-kafka:7.0.0
-    depends_on:
-      - zookeeper
-    ports:
-      - 9092:9092
-    environment:
-      KAFKA_BROKER_ID: 1
-      KAFKA_LISTENERS: PLAINTEXT://:9092
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
-      KAFKA_DELETE_TOPIC_ENABLE: "true"
-      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      image: confluentinc/cp-kafka:latest
+      restart: always
+      depends_on:
+          - zookeeper
+      ports:
+          - "9092:9092"
+      hostname: kafka
+      environment:
+          KAFKA_BROKER_ID: 1
+          KAFKA_LISTENERS: PLAINTEXT://:9092
+          KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+          KAFKA_LOG_DIRS: /var/lib/kafka/data
+          KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+          KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1  # Add this line to set replication factor for offsets topic
 
   postgres:
     image: postgres:latest
@@ -49,21 +54,22 @@ services:
       POSTGRES_PASSWORD: "P@ssw0rd"
       POSTGRES_DB: "online_shopping_db_kafka"
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql
 
   spark:
-    image: bitnami/spark:3.1.1
+    image: bitnami/spark:latest
     ports:
       - 4040:4040
     depends_on:
       - kafka
     environment:
       - SPARK_MASTER=local
-      - SPARK_APPLICATION_ARGS=--packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.1.1 /path/to/your/spark_script.py
+      - SPARK_APPLICATION_ARGS=--packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.1.1 ./4-Data_streaming.py
+      - JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64
     volumes:
-      - /path/to/your/spark_script.py:/opt/bitnami/spark/scripts/spark_script.py
+      - ./source_code/:/opt/bitnami/spark/scripts/4-Data_streaming.py
 
 networks:
   default:

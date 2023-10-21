@@ -4,66 +4,6 @@ import time
 import pandas as pd
 import psycopg2
 import configparser
-from google.cloud import pubsub_v1
-from google.api_core.exceptions import AlreadyExists, NotFound
-
-def interact_google_pubsub_topic():
-
-    """
-        This function perform connection to Google Cloud Pub/Sub and creates a Pub/Sub topic.
-    """
-
-    print("================================================")
-    print("========= Create Google Pub/Sub Topics =========")
-    print("================================================")
-    print()
-
-    global topic_path
-
-    # Initialize Pub/Sub Publisher and Subscriber client
-    try:
-        publisher = pubsub_v1.PublisherClient()
-        subscriber = pubsub_v1.SubscriberClient()
-    except Exception as e:
-        print(f"Error cannot create connection with Pub/Sub client: {e}")
-        sys.exit(1)
-
-    # Create a fully-qualified topic path
-    topic_path = publisher.topic_path(project=project_id, topic=pubsub_topic)
-
-    # Create a fully-qualified subscription path
-    subscription_path = subscriber.subscription_path(project=project_id, subscription=pubsub_subscription)
-
-    # Create Pub/Sub topic if it doesn't exist
-    try:
-        publisher.create_topic(name=topic_path)
-        print(f"Pub/Sub Topic has been created.")
-    except AlreadyExists:
-        print(f"Pub/Sub topic '{pubsub_topic}' already exists.")
-    except Exception as e:
-        print(f"Error creating Pub/Sub topic: {e}\n")
-        sys.exit(1)
-    
-    # Create Pub/Sub subscription if it doesn't exist
-    try:
-        subscriber.create_subscription(name=subscription_path, topic=topic_path, ack_deadline_seconds=300)
-        print(f"Pub/Sub Subscription has been created")
-    except AlreadyExists:
-        print(f"Pub/Sub subscription '{pubsub_subscription}' already exists.")
-    except Exception as e:
-        print(f"Error creating Pub/Sub subscription: {e}")
-        sys.exit(1)
-
-    print(f"Project id : {project_id}")
-    print(f"Topic path : {topic_path}")
-    print(f"Subscription path : {subscription_path}\n")
-    # Check if the subscription exists
-    while True:
-        check_streaming = str(input("Is Apache Beam available (y/n) ? : "))
-        if check_streaming == 'y':
-            break
-
-    time.sleep(5)
 
 def interact_postgres_db():
 
@@ -78,8 +18,8 @@ def interact_postgres_db():
 
     # Drop Trigger
     try:
-        cur.execute(f"DROP TRIGGER IF EXISTS data_change_trigger on {TARGET_TABLE};")
-        print(f"Drop trigger data_change_trigger success.")
+        cur.execute(f"DROP TRIGGER IF EXISTS data_change2kafka_trigger on {TARGET_TABLE};")
+        print(f"Drop trigger data_change2kafka_trigger success.")
     except Exception as e:
         print(f"Error cannot drop trigger: {e}")
         sys.exit(1)
@@ -111,30 +51,40 @@ def interact_postgres_db():
         sys.exit(1)
 
     # Read the SQL file
-    sql_file_path = "./notify_data_change.sql"
-    with open(sql_file_path, "r") as f:
-        sql_statement = f.read()
+    SQL_STATEMENT = f"""
+        -- PostgreSQL notification function to send notify to my channel
+        CREATE OR REPLACE FUNCTION notify_data_change() RETURNS TRIGGER AS $$
+        BEGIN
+            PERFORM pg_notify('{my_channel}', row_to_json(NEW)::text);
+            RETURN NEW;
+        END;
+        $$ LANGUAGE plpgsql;
 
-    print(sql_statement)
+        -- PostgreSQL trigger to activate the notification function
+        CREATE TRIGGER {my_trigger}
+        AFTER INSERT ON {TARGET_TABLE}
+        FOR EACH ROW
+        EXECUTE FUNCTION notify_data_change();
+    """
     
     # Create a PostgreSQL notification for detect change in table
     try:
-        cur.execute(sql_statement)
-        print(f"Create trigger for detect change in table success.\n")
+        cur.execute(SQL_STATEMENT)
+        print(f"Create trigger for detect change in table success.")
     except Exception as e:
         if "already exists" in str(e):
-            print("Trigger 'data_change_trigger' already exists for table 'online_shopping'.")
+            print(f"Trigger '{my_trigger}' already exists for table '{TARGET_TABLE}'.")
         else:
             print(f"Error creating trigger: {e}")
             sys.exit(1)
 
     # Enable trigger to target table for notice change
-    ENABLE_TRIGGER_SQL = f"ALTER TABLE {TARGET_TABLE} ENABLE TRIGGER data_change_trigger;"
+    ENABLE_TRIGGER_SQL = f"ALTER TABLE {TARGET_TABLE} ENABLE TRIGGER {my_trigger};"
     try:
         cur.execute(ENABLE_TRIGGER_SQL)
-        print(f"Enable trigger 'data_change_trigger' success.\n")
+        print(f"Enable trigger '{my_trigger}' success.\n")
     except Exception as e:
-        print(f"Error enable trigger 'data_change_trigger': {e}")
+        print(f"Error enable trigger '{my_trigger}': {e}")
         sys.exit(1)
 
     print()
@@ -145,8 +95,12 @@ def interact_postgres_db():
 
 def main():
 
-    interact_google_pubsub_topic()
     interact_postgres_db()
+
+    while True:
+        check_status = input("Is streaming process available (y/n)?: ")
+        if str.lower(check_status) == 'y':
+            break
 
     print("================================================")
     print("========== Loading Data to PostgreSQL ==========")
@@ -204,14 +158,13 @@ if __name__ == '__main__':
     config.read("./config.ini")
 
     try:
-        project_id = config.get('PROJ_CONF', 'PROJ_ID')
-        pubsub_topic = config.get('PROJ_CONF', 'PUBSUB_TOPIC_NAME')
-        pubsub_subscription = config.get('PROJ_CONF', 'PUBSUB_SUBSCRIPTION_NAME')
+        TARGET_TABLE = config.get('PROJ_CONF', 'TABLE_NAME')
+        my_channel = config.get('PROJ_CONF', 'MY_CHANNEL')
+        my_trigger = config.get('PROJ_CONF', 'MY_TRIGGER')
     except Exception as e:
         print(f"Error cannot get require parameters: {e}")
         sys.exit(1)
 
-    TARGET_TABLE = "online_shopping"
     db_name = os.getenv('PGDATABASE')
     db_user = os.getenv('PGUSER')
     db_password = os.getenv('PGPASSWORD')

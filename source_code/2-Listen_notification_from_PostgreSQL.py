@@ -48,7 +48,8 @@ if __name__ == '__main__':
     config.read("./config.ini")
 
     try:
-        topic = config.get('PROJ_CONF', 'KAFKA_TOPIC')
+        kafka_topic = config.get('PROJ_CONF', 'KAFKA_TOPIC')
+        kafka_broker = config.get('PROJ_CONF', 'KAFKA_BROKER')
         my_channel = config.get('PROJ_CONF', 'MY_CHANNEL')
     except Exception as e:
         print(f"Error cannot get required parameters: {e}")
@@ -84,14 +85,13 @@ if __name__ == '__main__':
     
     # Initialize Kafka Producer
     try:
-        producer = Producer({'bootstrap.servers': 'kafka:9092'})
+        producer = Producer({'bootstrap.servers': kafka_broker})
     except Exception as e:
         print(f"Error cannot create connection with Kafka producer: {e}")
         sys.exit(1)
 
-    # Define Kafka topic
-    kafka_topic = topic
-
+    print(f"Kafka topic: {kafka_topic}")
+    
     # Start listening to the PostgreSQL channel in a separate thread
     listener_thread = threading.Thread(target=listen_to_postgres_channel)
     listener_thread.start()
