@@ -2,7 +2,7 @@ version: '3'
 services:
   jupyter:
     build:
-      context: .
+      context: ./jupyter-notebook/
       dockerfile: Dockerfile
     image: jupyter-kafka-spark2bigquery:1.0
     container_name: jupyter-notebook-kafka-gcp-streaming-project
@@ -18,7 +18,7 @@ services:
       PGPASSWORD: P@ssw0rd
       PGDATABASE: online_shopping_db_kafka
       GOOGLE_APPLICATION_CREDENTIALS: ./secrete_key/planar-beach-402009-5c3ff91bc2fa.json
-      JAVA_HOME: /usr/lib/jvm/java-8-openjdk-amd64
+      JAVA_HOME: /usr/lib/jvm/java-11-openjdk-arm64
     command: ["start-notebook.sh", "--NotebookApp.token=''"]
 
   zookeeper:
@@ -59,17 +59,19 @@ services:
       - ./init.sql:/docker-entrypoint-initdb.d/init.sql
 
   spark:
-    image: bitnami/spark:latest
-    ports:
-      - 4040:4040
-    depends_on:
-      - kafka
-    environment:
-      - SPARK_MASTER=local
-      - SPARK_APPLICATION_ARGS=--packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.1.1 ./4-Data_streaming.py
-      - JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64
-    volumes:
-      - ./source_code/:/opt/bitnami/spark/scripts/4-Data_streaming.py
+      build:
+        context: ./bitnami-spark/
+        dockerfile: Dockerfile
+      image: sparkstreaming2bigquery:1.0
+      ports:
+        - "4040:4040"
+      depends_on:
+        - kafka
+      environment:
+        - SPARK_MASTER=local
+        - SPARK_APPLICATION_ARGS=--packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.1.1 ./4-Data_streaming.py  # Removed the ENV keyword
+      volumes:
+        - ./source_code/:/opt/bitnami/spark/scripts/4-Data_streaming.py
 
 networks:
   default:

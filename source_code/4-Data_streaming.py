@@ -62,10 +62,11 @@ def interact_google_pubsub_subscription():
         sys.exit(1)
 
 # Define a function to read message and load into Google BigQuery
-def process_notification(messages):
+def process_notification(messages, spark):
+    print(f"Message : {messages}")
+    print(f"Type of Message : {type(messages)}")
 
-    if not messages.isEmpty():
-
+    if len(messages.asDict()) > 0:
         # Define the schema for the incoming JSON messages
         message_schema = StructType([
             StructField('event_id', StringType(), True),
@@ -76,14 +77,15 @@ def process_notification(messages):
             StructField('item_quantity', IntegerType(), True),
             StructField('event_time', StringType(), True),
         ])
-
+        
         # Parse the JSON messages
-        message_df = messages.selectExpr("CAST(value AS STRING)").select(from_json(col("value"), message_schema).alias("message")).select("message.*")
-
+        message_df = messages.select(from_json(col("value"), message_schema).alias("message")).select("message.*")
+        print(f"Message DataFrame: {message_df}")
         # Perform necessary data transformations here if needed
         processed_data = message_df.withColumn("event_name", col("event_name").replace("_", " ").alias("event_name")).withColumn("event_time", to_timestamp(col("event_time"), "yyyy-MM-dd HH:mm:ss").alias("event_time"))
 
         # Write the processed data to BigQuery
+        print("Write to Bigquery")
         processed_data.write \
             .format('bigquery') \
             .option('table', f'{project_id}:{dataset}.{table_id}') \
@@ -91,7 +93,11 @@ def process_notification(messages):
             .save()
 
 def main():
+
+
     interact_google_pubsub_subscription()
+
+    global kafkaStream
 
     try:
         print("================================================")
@@ -100,8 +106,6 @@ def main():
         print()
         print("Streaming is available ...")
         print()
-
-        spark = SparkSession.builder.appName("Spark2BigQuery").getOrCreate()
         
         # Define a Structured Streaming DataFrame from Kafka source
         kafkaStream = spark.readStream \
@@ -113,8 +117,9 @@ def main():
         messages = kafkaStream.selectExpr("CAST(value AS STRING)")
 
         query = messages.writeStream \
-            .foreach(process_notification) \
-            .start()
+        .foreach(lambda batch: process_notification(batch, spark)) \
+        .start()
+
 
         query.awaitTermination()
     except KeyboardInterrupt as e:
@@ -148,6 +153,10 @@ if __name__ == '__main__':
         sys.exit(1)
 
     # Initialize Spark Session
-    spark = SparkSession.builder.appName("Spark2BigQuery").getOrCreate()
+
+    spark = SparkSession.builder.appName("Spark2BigQuery") \
+    .config("spark.jars.packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.1.1") \
+    .getOrCreate()
+
     
     main()
