@@ -7,8 +7,8 @@ import threading
 import time
 from confluent_kafka import Producer
 
-
 def listen_to_postgres_channel():
+
     cur.execute(f"LISTEN {my_channel}")
     print(f"Start listen to PostgreSQL channel: {my_channel}")
 
@@ -30,7 +30,7 @@ def listen_to_postgres_channel():
                 notification_data = notify.payload.encode("utf-8")
                 # Forward the notification to Kafka
                 try:
-                    producer.produce(kafka_topic, key='key', value=notification_data)
+                    producer.produce(kafka_topic, key="key", value=notification_data)
                     # To ensure the message is sent promptly
                     producer.flush()
                     print(f"Notification forwarded to Kafka topic: {notification_data}")
@@ -39,7 +39,25 @@ def listen_to_postgres_channel():
         
         time.sleep(1)
 
-if __name__ == '__main__':
+def main():
+
+    global producer
+
+    # Initialize Kafka Producer
+    try:
+        producer = Producer({"bootstrap.servers": kafka_broker})
+    except Exception as e:
+        print(f"Error cannot create connection with Kafka producer: {e}")
+        sys.exit(1)
+
+    print(f"Kafka topic: {kafka_topic}")
+    
+    # Start listening to the PostgreSQL channel in a separate thread
+    listener_thread = threading.Thread(target=listen_to_postgres_channel)
+    listener_thread.start()
+
+
+if __name__ == "__main__":
 
     # Initialize the configuration parser
     config = configparser.ConfigParser()
@@ -48,17 +66,17 @@ if __name__ == '__main__':
     config.read("./config.ini")
 
     try:
-        kafka_topic = config.get('PROJ_CONF', 'KAFKA_TOPIC')
-        kafka_broker = config.get('PROJ_CONF', 'KAFKA_BROKER')
-        my_channel = config.get('PROJ_CONF', 'MY_CHANNEL')
+        kafka_topic = config.get("PROJ_CONF", "KAFKA_TOPIC")
+        kafka_broker = config.get("PROJ_CONF", "KAFKA_BROKER")
+        my_channel = config.get("PROJ_CONF", "MY_CHANNEL")
     except Exception as e:
         print(f"Error cannot get required parameters: {e}")
         sys.exit(1)
 
-    db_name = os.getenv('PGDATABASE')
-    db_user = os.getenv('PGUSER')
-    db_password = os.getenv('PGPASSWORD')
-    db_host = os.getenv('PGHOST')
+    db_name = os.getenv("PGDATABASE")
+    db_user = os.getenv("PGUSER")
+    db_password = os.getenv("PGPASSWORD")
+    db_host = os.getenv("PGHOST")
 
     db_params = {
         "database": db_name,
@@ -83,15 +101,4 @@ if __name__ == '__main__':
         print(f"Error cannot create cursor object: {e}")
         sys.exit(1)
     
-    # Initialize Kafka Producer
-    try:
-        producer = Producer({'bootstrap.servers': kafka_broker})
-    except Exception as e:
-        print(f"Error cannot create connection with Kafka producer: {e}")
-        sys.exit(1)
-
-    print(f"Kafka topic: {kafka_topic}")
-    
-    # Start listening to the PostgreSQL channel in a separate thread
-    listener_thread = threading.Thread(target=listen_to_postgres_channel)
-    listener_thread.start()
+    main()

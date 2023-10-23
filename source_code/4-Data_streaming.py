@@ -38,13 +38,13 @@ def interact_google_pubsub_subscription():
 
     # Define table schema
     schema = [
-        bigquery.SchemaField('event_id', 'STRING'),
-        bigquery.SchemaField('name', 'STRING'),
-        bigquery.SchemaField('event_name', 'STRING'),
-        bigquery.SchemaField('category', 'STRING'),
-        bigquery.SchemaField('item_id', 'STRING'),
-        bigquery.SchemaField('item_quantity', 'INT64'),
-        bigquery.SchemaField('event_time', 'TIMESTAMP'),
+        bigquery.SchemaField("event_id", "STRING"),
+        bigquery.SchemaField("name", "STRING"),
+        bigquery.SchemaField("event_name", "STRING"),
+        bigquery.SchemaField("category", "STRING"),
+        bigquery.SchemaField("item_id", "STRING"),
+        bigquery.SchemaField("item_quantity", "INT64"),
+        bigquery.SchemaField("event_time", "TIMESTAMP"),
     ]
 
     # Create table in BigQuery
@@ -61,65 +61,60 @@ def interact_google_pubsub_subscription():
         print(f"Error creating BigQuery table: {e}")
         sys.exit(1)
 
-# Define a function to read message and load into Google BigQuery
-def process_notification(messages, spark):
-    print(f"Message : {messages}")
-    print(f"Type of Message : {type(messages)}")
-
-    if len(messages.asDict()) > 0:
-        # Define the schema for the incoming JSON messages
-        message_schema = StructType([
-            StructField('event_id', StringType(), True),
-            StructField('name', StringType(), True),
-            StructField('event_name', StringType(), True),
-            StructField('category', StringType(), True),
-            StructField('item_id', StringType(), True),
-            StructField('item_quantity', IntegerType(), True),
-            StructField('event_time', StringType(), True),
-        ])
-        
-        # Parse the JSON messages
-        message_df = messages.select(from_json(col("value"), message_schema).alias("message")).select("message.*")
-        print(f"Message DataFrame: {message_df}")
-        # Perform necessary data transformations here if needed
-        processed_data = message_df.withColumn("event_name", col("event_name").replace("_", " ").alias("event_name")).withColumn("event_time", to_timestamp(col("event_time"), "yyyy-MM-dd HH:mm:ss").alias("event_time"))
-
-        # Write the processed data to BigQuery
-        print("Write to Bigquery")
-        processed_data.write \
-            .format('bigquery') \
-            .option('table', f'{project_id}:{dataset}.{table_id}') \
-            .mode('append') \
-            .save()
-
 def main():
 
 
     interact_google_pubsub_subscription()
 
-    global kafkaStream
+    print("================================================")
+    print("============ Start Spark Streaming ============")
+    print("================================================")
+    print()
+    print("Streaming is available ...")
+    print()
+
+    # Adjust Kafka parameters for higher throughput and lower latency
+    kafkaParams = {
+        "bootstrap.servers": kafka_broker,
+        "key.deserializer": "org.apache.kafka.common.serialization.StringDeserializer",
+        "value.deserializer": "org.apache.kafka.common.serialization.StringDeserializer",
+        # Other Kafka consumer parameters
+    }
+
+    # Define a Structured Streaming DataFrame from Kafka source
+    kafkaStream = spark.readStream \
+        .format("kafka") \
+        .option("kafka.bootstrap.servers", kafka_broker) \
+        .option(kafkaParams) \
+        .option("subscribe", kafka_topic) \
+        .load()
+
+    message_schema = StructType([
+        StructField("event_id", StringType(), True),
+        StructField("name", StringType(), True),
+        StructField("event_name", StringType(), True),
+        StructField("category", StringType(), True),
+        StructField("item_id", StringType(), True),
+        StructField("item_quantity", IntegerType(), True),
+        StructField("event_time", StringType(), True),
+    ])
+    
+    # Process the Kafka messages and convert to DataFrame
+    messages_df = messages.select(from_json(col("value"), message_schema).alias("message")) \
+        .select("message.*")
+
+    # Perform necessary data transformations here if needed
+    processed_data = messages_df \
+        .withColumn("event_name", col("event_name").replace("_", " ").alias("event_name")) \
+        .withColumn("event_time", to_timestamp(col("event_time"), "yyyy-MM-dd HH:mm:ss").alias("event_time"))
 
     try:
-        print("================================================")
-        print("============ Start Spark Streaming ============")
-        print("================================================")
-        print()
-        print("Streaming is available ...")
-        print()
-        
-        # Define a Structured Streaming DataFrame from Kafka source
-        kafkaStream = spark.readStream \
-            .format("kafka") \
-            .option("kafka.bootstrap.servers", kafka_broker) \
-            .option("subscribe", kafka_topic) \
-            .load()
-
-        messages = kafkaStream.selectExpr("CAST(value AS STRING)")
-
-        query = messages.writeStream \
-        .foreach(lambda batch: process_notification(batch, spark)) \
-        .start()
-
+        # Write the processed data to BigQuery
+        query = processed_data.writeStream \
+            .outputMode("append") \
+            .format("bigquery") \
+            .option("table", f"{project_id}.{dataset_id}.{table_id}") \
+            .start()
 
         query.awaitTermination()
     except KeyboardInterrupt as e:
@@ -129,12 +124,11 @@ def main():
         print()
         print("Streaming is unavailable ...")
 
-
 ######################################
 ############ MAIN PROGRAM ############
 ######################################
 
-if __name__ == '__main__':
+if __name__ == "__main__":
 
     # Initialize the configuration parser
     config = configparser.ConfigParser()
@@ -143,11 +137,11 @@ if __name__ == '__main__':
     config.read("./config.ini")
 
     try:
-        kafka_broker = config.get('PROJ_CONF', 'KAFKA_BROKER')
-        kafka_topic = config.get('PROJ_CONF', 'KAFKA_TOPIC')
-        project_id = config.get('PROJ_CONF', 'PROJ_ID')
-        dataset_id = config.get('PROJ_CONF', 'DATASET_NAME')
-        table_id = config.get('PROJ_CONF', 'TABLE_NAME')
+        kafka_broker = config.get("PROJ_CONF", "KAFKA_BROKER")
+        kafka_topic = config.get("PROJ_CONF", "KAFKA_TOPIC")
+        project_id = config.get("PROJ_CONF", "PROJ_ID")
+        dataset_id = config.get("PROJ_CONF", "DATASET_NAME")
+        table_id = config.get("PROJ_CONF", "TABLE_NAME")
     except Exception as e:
         print(f"Error cannot get require parameters: {e}")
         sys.exit(1)
