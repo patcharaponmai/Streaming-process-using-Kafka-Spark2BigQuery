@@ -89,6 +89,8 @@ def main():
         .option("subscribe", kafka_topic) \
         .load()
 
+    print(f"kafkaStream = {kafkaStream}")
+
     message_schema = StructType([
         StructField("event_id", StringType(), True),
         StructField("name", StringType(), True),
@@ -98,10 +100,15 @@ def main():
         StructField("item_quantity", IntegerType(), True),
         StructField("event_time", StringType(), True),
     ])
+
+    messages_df = kafkaStream.selectExpr("CAST(value AS STRING)")
+    print(f"Before messages_df = {messages_df}")
     
     # Process the Kafka messages and convert to DataFrame
     messages_df = messages.select(from_json(col("value"), message_schema).alias("message")) \
         .select("message.*")
+
+    print(f"After messages_df = {messages_df}")
 
     # Perform necessary data transformations here if needed
     processed_data = messages_df \
