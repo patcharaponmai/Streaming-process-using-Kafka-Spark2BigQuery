@@ -32,7 +32,7 @@ def interact_postgres_db():
         print(f"Error cannot drop table {TARGET_TABLE}: {e}")
         sys.exit(1)
 
-    # Create target table in PostgreSQL
+    # Create trigger to detect change in table and send notification in text object while in JSON form
     CREATE_TABLE_SQL = f""" CREATE TABLE IF NOT EXISTS {TARGET_TABLE} (
                         "event_id" VARCHAR,
                         "name" VARCHAR,
