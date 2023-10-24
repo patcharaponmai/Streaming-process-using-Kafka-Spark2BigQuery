@@ -88,7 +88,6 @@ if __name__ == "__main__":
     # Establish a connection to the PostgreSQL database
     try:
         conn = psycopg2.connect(**db_params)
-        conn.set_session(autocommit=True)
         conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_AUTOCOMMIT)
     except Exception as e:
         print(f"Error cannot connect to PostgreSQL: {e}")
